@@ -4,7 +4,7 @@ import time
 import matplotlib.pyplot as plt
 import seaborn as sns
 from improved_hmm_model import ImprovedHMMModel
-from utils import load_data
+from utils import load_data,compare_monte_carlo_to_original
 
 from trade_simulator import TradeSimulator
 from sklearn.metrics import classification_report, confusion_matrix
@@ -144,6 +144,49 @@ def test_with_simulator(model, test_data, ticker):
     return simulator
 
 
+def run_monte_carlo_analysis(model, test_data, ticker):
+    """
+    Run Monte Carlo analysis on the model to assess robustness.
+    
+    Parameters:
+    -----------
+    model : ImprovedHMMModel
+        A fitted HMM model
+    test_data : pd.DataFrame
+        Test data with OHLCV columns
+    ticker : str
+        Ticker symbol for display purposes
+    """
+    print(f"\n=== Running Monte Carlo Analysis for {ticker} ===")
+    print("This will generate synthetic price series and test model robustness...")
+    
+    # Run Monte Carlo simulation with 1000 simulations and 95% confidence level
+    mc_results, original_metrics, comparison_df = compare_monte_carlo_to_original(
+        model, test_data, n_simulations=1000, confidence_level=0.95
+    )
+    
+    # Print comparison results
+    print("\nMonte Carlo vs Original Performance:")
+    print(comparison_df.to_string(index=False))
+    
+    # Interpret results
+    print("\nInterpretation:")
+    for _, row in comparison_df.iterrows():
+        metric = row['Metric']
+        percentile = row['Percentile']
+        within_ci = row['Within 95% CI']
+        
+        if within_ci:
+            print(f"- {metric}: Original performance is within the 95% confidence interval (percentile: {percentile:.1f})")
+        else:
+            if percentile < 2.5:
+                print(f"- {metric}: Original performance is WORSE than expected (percentile: {percentile:.1f})")
+            elif percentile > 97.5:
+                print(f"- {metric}: Original performance is BETTER than expected (percentile: {percentile:.1f})")
+    
+    return mc_results, original_metrics, comparison_df
+
+
 def main():
     # Set parameters
     ticker = "AAPL"  # Changed from SPY to AAPL
@@ -215,7 +258,15 @@ def main():
     # Test with simulator
     simulator = test_with_simulator(model, test_data, ticker)
     
-    # NEW: Run permutation tests
+    
+    
+    
+    #monte carlo simulation (generate sythetic data price series with the same statistical proprities as the real data than test the robustness of the model)
+    mc_results, original_metrics, mc_comparison = run_monte_carlo_analysis(model, test_data, ticker)
+
+    
+    
+    #  Run permutation tests
     print("\n=== Running Permutation Tests ===")
     
     # Run standard permutation tests
@@ -226,13 +277,13 @@ def main():
     wf_perm_results = run_walk_forward_permutation_test(
         data, 
         model, 
-        window_size=252,  # 1 year of trading days
+        window_size=252*2,  # 1 year of trading days
         step_size=63,     # ~3 months
-        n_permutations=100,
-        metric='sharpe',
+        n_permutations=1000,
+        metric='total_return',
         optimize_once=True
     )
-    plot_walk_forward_permutation_results(wf_perm_results, "Sharpe Ratio")
+    plot_walk_forward_permutation_results(wf_perm_results, "total_return")
     
     return model, predictions, simulator
 
