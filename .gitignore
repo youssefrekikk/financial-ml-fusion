@@ -10,6 +10,8 @@ htmlcov/
 venv/
 env/
 .env/
+.venv/
+
 
 
 
@@ -25,7 +27,26 @@ env/
 .vscode/
 *.swp
 *.swo
+# Model checkpoints and logs
+lightning_logs/
+models/*.pth
+models/*.pt
+models/*.ckpt
+*.ckpt
 
+# TensorBoard logs
+events.out.tfevents.*
+# Results and output files
+detailed_results/*.png
+detailed_results/*.csv
+grid_search_results/*.json
+grid_search_results/*.csv
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+# Large data files
+data_backup/
+data/processed/
 # OS specific files
 .DS_Store
 Thumbs.db

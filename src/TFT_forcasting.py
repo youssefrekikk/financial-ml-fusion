@@ -32,12 +32,35 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
     """
     # Load data
     try:
-        # Try to load with date index
-        data = pd.read_csv(csv_file, index_col=0, parse_dates=True)
+        # Skip the first 3 rows and use the 1st row as header
+        data = pd.read_csv(csv_file, skiprows=3, header=None)
+        
+        # Assign column names from the first row of the file
+        with open(csv_file, 'r') as f:
+            header = f.readline().strip().split(',')
+        
+        data.columns = header
+        
+        # Convert the first column to datetime and set as index
+        data[header[0]] = pd.to_datetime(data[header[0]])
+        data.set_index(header[0], inplace=True)
+        
         print(f"Data loaded with DatetimeIndex: {data.index[0]} to {data.index[-1]}")
-    except:
+        
+        # Add ticker information
+        with open(csv_file, 'r') as f:
+            next(f)  # Skip first line
+            ticker_line = next(f).strip().split(',')
+            ticker = ticker_line[1]  # Assuming AAPL is in position 1
+        
+        data['Ticker'] = ticker
+        print(f"Added ticker: {ticker}")        
+    except Exception as e:
+        print(f"Error loading data with date index: {e}")
         # Fall back to regular loading
         data = pd.read_csv(csv_file)
+        print(f"Data loaded without date index. Columns: {data.columns.tolist()}")
+        print(f"First few rows:\n{data.head()}")
         # Check for date column
         date_column = None
         for col in ['Date', 'date', 'datetime', 'Datetime']:
@@ -52,13 +75,66 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
         else:
             print(f"Warning: No date column found. Available columns: {data.columns.tolist()}")
     
-    # Sort by date
-    data = data.sort_index()
+    if not isinstance(data.index, pd.DatetimeIndex):
+        # Try to convert the index to DatetimeIndex if it's not already
+        try:
+            data.index = pd.to_datetime(data.index)
+            print(f"Index converted to DatetimeIndex: {data.index[0]} to {data.index[-1]}")
+        except Exception as e:
+            print(f"Warning: Could not convert index to DatetimeIndex: {e}")
+            # Create a dummy date index as a fallback
+            print("Creating dummy date index based on position")
+            start_date = pd.Timestamp('2000-01-01')
+            data.index = pd.date_range(start=start_date, periods=len(data), freq='D')
+            
+    data['day_of_week'] = data.index.dayofweek  # 0=Monday, 6=Sunday
+    data['month'] = data.index.month  # 1-12
+    data['day_of_month'] = data.index.day  # 1-31
+    data['week_of_year'] = data.index.isocalendar().week  # 1-53
+    data['quarter'] = data.index.quarter  # 1-4
+    
+    # Convert numeric categorical features to pandas categorical type
+    data['day_of_week'] = data['day_of_week'].astype(str)
+    data['month'] = data['month'].astype(str)
+    data['quarter'] = data['quarter'].astype(str)
+
+    
+    # You could also add binary indicators for special periods
+    data['is_month_start'] = data.index.is_month_start.astype(int)
+    data['is_month_end'] = data.index.is_month_end.astype(int)
+    data['is_quarter_end'] = data.index.is_quarter_end.astype(int)
+    
     
     # Apply feature engineering
     data = add_features(data)
-    print(f"Data shape after feature engineering: {data.shape}")
     
+    # Print data types to verify conversion
+    print("Data types after conversion:")
+    print(data[['day_of_week', 'month', 'quarter']].dtypes)
+    # Forward fill first (use previous values)
+    
+    
+    data = data.fillna(method='ffill')
+     # For categorical columns, fill with mode (most common value)
+    categorical_cols = ['day_of_week', 'month', 'quarter']
+    for col in categorical_cols:
+        if data[col].isna().any():
+            mode_value = data[col].mode()[0]
+            data[col] = data[col].fillna(mode_value)
+    
+    # For numerical columns, fill with mean
+    numerical_cols = [col for col in data.columns if col not in categorical_cols]
+    for col in numerical_cols:
+        if data[col].isna().any():
+            data[col] = data[col].fillna(data[col].mean())
+            
+    
+    
+    print(f"Data shape after feature engineering: {data.shape}")
+    nan_counts = data.isna().sum()
+    if nan_counts.sum() > 0:
+        print("Warning: Data still contains NaN values after filling:")
+        print(nan_counts[nan_counts > 0])
     # Reset index to have date as a column
     data = data.reset_index()
     data.rename(columns={data.columns[0]: 'date'}, inplace=True)
@@ -76,8 +152,8 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
     data = data.dropna(subset=['target'])
     
     # Define static and time-varying features
-    time_varying_known_categoricals = []
-    time_varying_known_reals = ['Open', 'High', 'Low', 'Close', 'Volume']
+    time_varying_known_categoricals = ['day_of_week', 'month', 'quarter']
+    time_varying_known_reals = ['Open', 'High', 'Low', 'Close', 'Volume','day_of_month', 'week_of_year']
     time_varying_unknown_categoricals = []
     time_varying_unknown_reals = [
         'Return', 'Log_Return', 'Return_Volatility', 'Open_Close_Diff', 
@@ -94,7 +170,7 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
     max_encoder_length = seq_len
     max_prediction_length = prediction_length
     
-    training_cutoff = data['time_idx'].max() - max_prediction_length
+    training_cutoff = int(data['time_idx'].max() * 0.8)
     
     training = TimeSeriesDataSet(
         data=data[lambda x: x.time_idx <= training_cutoff],
@@ -110,7 +186,7 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
         time_varying_unknown_categoricals=time_varying_unknown_categoricals,
         time_varying_unknown_reals=time_varying_unknown_reals,
         target_normalizer=GroupNormalizer(
-            groups=["group_id"], transformation="softplus"
+            groups=["group_id"], transformation="softplus",center=False
         ),
         add_relative_time_idx=True,
         add_target_scales=True,
@@ -158,22 +234,28 @@ def train_tft_model(training, train_dataloader, val_dataloader,
         attention_head_size=attention_head_size,
         dropout=dropout,
         hidden_continuous_size=hidden_continuous_size,
-        loss=QuantileLoss(),
+        loss=QuantileLoss(quantiles=[0.1, 0.5, 0.9]),
         learning_rate=learning_rate,
-        log_interval=10,
+        log_interval=0,
         reduce_on_plateau_patience=3,
+
     )
     
-    # Create logger
-    logger = TensorBoardLogger("lightning_logs")
+    
     
     # Create early stopping callback
     early_stop_callback = EarlyStopping(
-        monitor="val_loss", min_delta=1e-4, patience=5, verbose=False, mode="min"
+        monitor="val_loss", 
+        min_delta=1e-4, 
+        patience=5, 
+        verbose=True, 
+        mode="min"
     )
     
     # Create learning rate monitor
     lr_logger = LearningRateMonitor()
+    # Create logger
+    logger = TensorBoardLogger("lightning_logs")
     
     # Create trainer
     trainer = pl.Trainer(
@@ -184,7 +266,11 @@ def train_tft_model(training, train_dataloader, val_dataloader,
         callbacks=[early_stop_callback, lr_logger],
         logger=logger,
         enable_progress_bar=enable_progress_bar,
+        limit_val_batches=1.0,  # Use all validation batches
+        log_every_n_steps=10,
+        enable_checkpointing=True,
     )
+    
     
     # Fit model
     trainer.fit(
@@ -228,14 +314,23 @@ def generate_predictions(model, validation_dataloader, data, threshold=0.002):
     if isinstance(predictions, dict) and 0.5 in predictions:
         predictions = predictions[0.5]
     
-    # Get validation indices
-    validation_data = validation_dataloader.dataset.data
+    # Alternative approach: get the time indices from the validation dataset's data
+    # This assumes the validation dataset has the same order as the predictions
+    training_cutoff = data['time_idx'].max() - validation_dataloader.dataset.max_prediction_length
+    validation_time_idx = data[data['time_idx'] > training_cutoff]['time_idx'].values
     
     # Create DataFrame with predictions
     pred_df = pd.DataFrame({
-        'time_idx': validation_data['time_idx'].values,
         'prediction': predictions.flatten()
     })
+    
+    # Make sure the length matches the predictions
+    if len(validation_time_idx) >= len(predictions):
+        pred_df['time_idx'] = validation_time_idx[:len(predictions)]
+    else:
+        # If we can't determine the exact time indices, create sequential indices
+        print("Warning: Could not determine exact time indices for predictions. Using sequential indices.")
+        pred_df['time_idx'] = np.arange(len(predictions)) + training_cutoff + 1
     
     # Merge with original data
     result_df = pd.merge(data, pred_df, on='time_idx', how='left')
@@ -257,6 +352,8 @@ def generate_predictions(model, validation_dataloader, data, threshold=0.002):
     result_df.set_index('date', inplace=True)
     
     return result_df
+
+
 
 def evaluate_predictions(result_df):
     """
@@ -495,21 +592,28 @@ def main():
     plot_predictions(result_df, ticker)
     
     # Analyze feature importance
+    # Analyze feature importance
     print("Analyzing feature importance...")
-    interpretation = model.interpret_output(
-        val_dataloader,
-        reduction="sum"
-    )
-    
-    # Plot feature importance
-    plt.figure(figsize=(10, 8))
-    order = interpretation["variable_importance"].mean(0).sort_values(ascending=False).index
-    interpretation["variable_importance"].mean(0)[order].plot.barh()
-    plt.title(f"{ticker} - Feature Importance")
-    plt.tight_layout()
-    plt.savefig(f"plots/{ticker}_tft_feature_importance.png")
-    plt.close()
-    print(f"Feature importance plot saved to plots/{ticker}_tft_feature_importance.png")
+    try:
+        # Use the built-in interpretation method
+        interpretation = model.interpret_output(
+            val_dataloader,
+            reduction="sum"
+        )
+        
+        # Plot feature importance
+        plt.figure(figsize=(10, 8))
+        order = interpretation["variable_importance"].mean(0).sort_values(ascending=False).index
+        interpretation["variable_importance"].mean(0)[order].plot.barh()
+        plt.title(f"{ticker} - Feature Importance")
+        plt.tight_layout()
+        plt.savefig(f"plots/{ticker}_tft_feature_importance.png")
+        plt.close()
+        print(f"Feature importance plot saved to plots/{ticker}_tft_feature_importance.png")
+    except Exception as e:
+        print(f"Error generating feature importance: {e}")
+        print("Skipping feature importance analysis")
+
     
     # Save metrics to CSV
     pd.DataFrame([metrics]).to_csv(f"results/{ticker}_tft_metrics.csv", index=False)

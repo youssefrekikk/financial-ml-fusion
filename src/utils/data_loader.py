@@ -32,14 +32,23 @@ def load_data(ticker, start_date="2018-01-01", end_date=date.today().strftime('%
         
         if os.path.exists(file_path):
             try:
-                # Explicitly set numeric columns to float
-                data = pd.read_csv(file_path, index_col=0, parse_dates=True)
+                # Custom loading for the unusual CSV format
+                # Skip the first 3 rows and use the 1st row as header
+                data = pd.read_csv(file_path, skiprows=3, header=None)
                 
-                # Convert price and volume columns to numeric
-                numeric_columns = ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
-                for col in numeric_columns:
-                    if col in data.columns:
-                        data[col] = pd.to_numeric(data[col], errors='coerce')
+                # Assign column names from the first row of the file
+                with open(file_path, 'r') as f:
+                    header = f.readline().strip().split(',')
+                
+                data.columns = header
+                
+                # Convert the first column to datetime and set as index
+                data[header[0]] = pd.to_datetime(data[header[0]])
+                data.set_index(header[0], inplace=True)
+                
+                # Convert numeric columns
+                for col in header[1:]:  # Skip date column
+                    data[col] = pd.to_numeric(data[col], errors='coerce')
                 
                 # Filter by date range
                 data = data[(data.index >= start_date) & (data.index <= end_date)]
