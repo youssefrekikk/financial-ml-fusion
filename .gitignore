@@ -42,11 +42,14 @@ detailed_results/*.csv
 logs/
 results/*.csv
 plots
+data_backup/*
+data/*.csv
+!data/.gitkeep
+!data_backup/.gitkeep
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/
-# Large data files
-data_backup/
+
 
 # OS specific files
 .DS_Store
