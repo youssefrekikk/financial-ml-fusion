@@ -35,6 +35,11 @@ def run_grid_search(tickers, seq_lengths, pred_lengths, thresholds, data_dir="da
     Returns:
         pd.DataFrame: Results of grid search
     """
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(root_dir, data_dir)
+    results_dir = os.path.join(root_dir, results_dir)
+    
+    
     # Create results directory
     os.makedirs(results_dir, exist_ok=True)
     
@@ -343,6 +348,9 @@ def run_detailed_evaluation(ticker, seq_len, pred_length, threshold, data_dir="d
         data_dir (str): Directory containing data files
         results_dir (str): Directory to save results
     """
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(root_dir, data_dir)
+    results_dir = os.path.join(root_dir, results_dir)
     os.makedirs(results_dir, exist_ok=True)
     
     csv_file = os.path.join(data_dir, f"{ticker}.csv")
@@ -451,6 +459,9 @@ def plot_parameter_heatmap(results_df, ticker, metric='sharpe_ratio', save_dir="
         metric (str): Metric to visualize
         save_dir (str): Directory to save plot
     """
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    save_dir = os.path.join(root_dir, save_dir)
+    
     os.makedirs(save_dir, exist_ok=True)
     
     # Filter results for the specified ticker
@@ -488,16 +499,18 @@ def plot_parameter_heatmap(results_df, ticker, metric='sharpe_ratio', save_dir="
         plt.close()
 
 def main():
-    """Main function to run the TFT model testing"""
-    # Create necessary directories
-    os.makedirs("results", exist_ok=True)
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("plots", exist_ok=True)
-    os.makedirs("grid_search_results", exist_ok=True)
-    os.makedirs("detailed_results", exist_ok=True)
+    # Get the root directory
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # Create necessary directories with absolute paths
+    os.makedirs(os.path.join(root_dir, "results"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, "models"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, "plots"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, "grid_search_results"), exist_ok=True)
+    os.makedirs(os.path.join(root_dir, "detailed_results"), exist_ok=True)
     
     # Define tickers to test
-    tickers = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
+    tickers = ["AAPL", "MSFT"]
     
     # Define parameter ranges for grid search
     seq_lengths = [10, 20, 30, 60]
