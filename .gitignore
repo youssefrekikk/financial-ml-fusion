@@ -40,8 +40,8 @@ events.out.tfevents.*
 detailed_results/*.png
 detailed_results/*.csv
 logs/
-results/*.csv
-plots
+
+
 data_backup/*
 data/*.csv
 !data/.gitkeep
