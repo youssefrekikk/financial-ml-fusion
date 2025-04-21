@@ -1,0 +1,23 @@
+{
+    "MSE": 0.0016000223108448258,
+    "MAE": 0.03653580746207926,
+    "Direction_Accuracy": 0.5365307037203048,
+    "Signal_Accuracy": 0.42850739578664276,
+    "Total_Predictions": 2231,
+    "Buy_Signals": 783,
+    "Sell_Signals": 604,
+    "Hold_Signals": 844,
+    "Signal_Rate": 0.6216943074854325,
+    "strategy_return": -0.27302585125209544,
+    "sharpe_ratio": -0.06687358767539413,
+    "max_drawdown": -0.5876422680298213,
+    "win_rate": 0.4996395097332372,
+    "profit_factor": 0.9850032190598713,
+    "precision": 0.5365307037203048,
+    "recall": 1.0,
+    "f1_score": 0.6983663943990666,
+    "ticker": "AAPL",
+    "seq_len": 10,
+    "pred_length": 3,
+    "threshold": 0.002
+}
