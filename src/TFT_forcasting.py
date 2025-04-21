@@ -186,7 +186,7 @@ def prepare_data(csv_file, seq_len=10, prediction_length=1):
         time_varying_unknown_categoricals=time_varying_unknown_categoricals,
         time_varying_unknown_reals=time_varying_unknown_reals,
         target_normalizer=GroupNormalizer(
-            groups=["group_id"], transformation="softplus",center=False
+            groups=["group_id"], transformation="log1p",center=True
         ),
         add_relative_time_idx=True,
         add_target_scales=True,
@@ -284,7 +284,6 @@ def train_tft_model(training, train_dataloader, val_dataloader,
     best_tft = TemporalFusionTransformer.load_from_checkpoint(best_model_path)
     
     return best_tft
-
 def generate_predictions(model, validation_dataloader, data, threshold=0.002):
     """
     Generate predictions and trading signals
@@ -314,45 +313,73 @@ def generate_predictions(model, validation_dataloader, data, threshold=0.002):
     if isinstance(predictions, dict) and 0.5 in predictions:
         predictions = predictions[0.5]
     
-    # Alternative approach: get the time indices from the validation dataset's data
-    # This assumes the validation dataset has the same order as the predictions
-    training_cutoff = data['time_idx'].max() - validation_dataloader.dataset.max_prediction_length
-    validation_time_idx = data[data['time_idx'] > training_cutoff]['time_idx'].values
+    # Get the validation indices
+    # Find the cutoff point between training and validation
+    training_cutoff = int(len(data) * 0.8)  # Assuming 80/20 split
     
-    # Create DataFrame with predictions
+    # Get validation data
+    validation_data = data.iloc[training_cutoff:].copy()
+    
+    # Create a DataFrame with predictions
     pred_df = pd.DataFrame({
         'prediction': predictions.flatten()
     })
     
-    # Make sure the length matches the predictions
-    if len(validation_time_idx) >= len(predictions):
-        pred_df['time_idx'] = validation_time_idx[:len(predictions)]
+    # Add time indices - make sure we have the right number
+    if len(pred_df) <= len(validation_data):
+        # Use the last len(pred_df) rows from validation data
+        valid_indices = validation_data.index[-len(pred_df):]
+        pred_df.index = valid_indices
     else:
-        # If we can't determine the exact time indices, create sequential indices
-        print("Warning: Could not determine exact time indices for predictions. Using sequential indices.")
-        pred_df['time_idx'] = np.arange(len(predictions)) + training_cutoff + 1
+        # Truncate predictions to match validation data
+        pred_df = pred_df.iloc[:len(validation_data)]
+        pred_df.index = validation_data.index
     
     # Merge with original data
-    result_df = pd.merge(data, pred_df, on='time_idx', how='left')
+    result_df = validation_data.copy()
+    result_df['prediction'] = pred_df['prediction']
+    
+    # Calculate dynamic threshold based on prediction distribution
+    pred_std = result_df['prediction'].std()
+    pred_mean = result_df['prediction'].mean()
+    print(f"Prediction stats: mean={pred_mean:.6f}, std={pred_std:.6f}, min={result_df['prediction'].min():.6f}, max={result_df['prediction'].max():.6f}")
+    # FIX: Use a symmetric approach for thresholds
+    # Use the same multiplier for both positive and negative thresholds
+    multiplier = 0.5
+    positive_threshold = pred_mean + (pred_std * multiplier)
+    negative_threshold = pred_mean - (pred_std * multiplier)
+    
+    # Ensure minimum threshold size but keep symmetry
+    if positive_threshold < threshold:
+        positive_threshold = threshold
+    if abs(negative_threshold) < threshold:
+        negative_threshold = -threshold
+    
+    print(f"Using dynamic thresholds: positive={positive_threshold:.6f}, negative={negative_threshold:.6f} (original: {threshold:.6f})")
     
     # Generate signals
     result_df['signal'] = 0  # Default to hold
-    result_df.loc[result_df['prediction'] > threshold, 'signal'] = 1  # Buy
-    result_df.loc[result_df['prediction'] < -threshold, 'signal'] = -1  # Sell
+    result_df.loc[result_df['prediction'] > positive_threshold, 'signal'] = 1  # Buy
+    result_df.loc[result_df['prediction'] < negative_threshold, 'signal'] = -1  # Sell
     
     # Calculate confidence
     result_df['confidence'] = 0.0
-    mask = abs(result_df['prediction']) > threshold
-    result_df.loc[mask, 'confidence'] = np.minimum(
-        (abs(result_df.loc[mask, 'prediction']) - threshold) / (0.01 - threshold), 
+    
+    # For buy signals
+    buy_mask = result_df['prediction'] > positive_threshold
+    result_df.loc[buy_mask, 'confidence'] = np.minimum(
+        (result_df.loc[buy_mask, 'prediction'] - positive_threshold) / (pred_std), 
         1.0
     )
     
-    # Set date as index
-    result_df.set_index('date', inplace=True)
+    # For sell signals
+    sell_mask = result_df['prediction'] < negative_threshold
+    result_df.loc[sell_mask, 'confidence'] = np.minimum(
+        (negative_threshold - result_df.loc[sell_mask, 'prediction']) / (pred_std), 
+        1.0
+    )
     
     return result_df
-
 
 
 def evaluate_predictions(result_df):
@@ -592,27 +619,48 @@ def main():
     plot_predictions(result_df, ticker)
     
     # Analyze feature importance
-    # Analyze feature importance
     print("Analyzing feature importance...")
     try:
-        # Use the built-in interpretation method
-        interpretation = model.interpret_output(
-            val_dataloader,
-            reduction="sum"
-        )
-        
-        # Plot feature importance
-        plt.figure(figsize=(10, 8))
-        order = interpretation["variable_importance"].mean(0).sort_values(ascending=False).index
-        interpretation["variable_importance"].mean(0)[order].plot.barh()
-        plt.title(f"{ticker} - Feature Importance")
-        plt.tight_layout()
-        plt.savefig(f"plots/{ticker}_tft_feature_importance.png")
-        plt.close()
-        print(f"Feature importance plot saved to plots/{ticker}_tft_feature_importance.png")
+        # Get a batch from the validation dataloader
+        for x, y in val_dataloader:
+            batch_x, batch_y = x, y
+            break  # Just use the first batch
+            
+        # Use the built-in interpretation method with the batch
+        try:
+            interpretation = model.interpret_output(batch_x, batch_y)
+            
+            # Check what keys are available in the interpretation
+            print(f"Available interpretation keys: {list(interpretation.keys())}")
+            
+            if "variable_importance" in interpretation:
+                # Plot feature importance
+                plt.figure(figsize=(10, 8))
+                order = interpretation["variable_importance"].mean(0).sort_values(ascending=False).index
+                interpretation["variable_importance"].mean(0)[order].plot.barh()
+                plt.title(f"{ticker} - Feature Importance")
+                plt.tight_layout()
+                plt.savefig(f"plots/{ticker}_tft_feature_importance.png")
+                plt.close()
+            elif "decoder_attention" in interpretation:
+                # Plot decoder attention instead
+                plt.figure(figsize=(10, 8))
+                plt.matshow(interpretation["decoder_attention"][0].cpu().numpy(), aspect="auto")
+                plt.title(f"{ticker} - Decoder Attention")
+                plt.colorbar()
+                plt.tight_layout()
+                plt.savefig(f"plots/{ticker}_tft_decoder_attention.png")
+                plt.close()
+        except Exception as e:
+            print(f"Error generating feature importance: {e}")
+            print("Skipping feature importance analysis")
+
+                
+                
     except Exception as e:
         print(f"Error generating feature importance: {e}")
         print("Skipping feature importance analysis")
+
 
     
     # Save metrics to CSV

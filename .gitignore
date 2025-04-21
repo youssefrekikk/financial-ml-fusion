@@ -41,6 +41,8 @@ detailed_results/*.png
 detailed_results/*.csv
 grid_search_results/*.json
 grid_search_results/*.csv
+results/*.csv
+plots
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 notebooks/.ipynb_checkpoints/

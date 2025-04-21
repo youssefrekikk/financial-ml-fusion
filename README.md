@@ -1,5 +1,5 @@
 Financial ML Fusion
-A comprehensive machine learning framework for financial time series forecasting, market regime detection, and automated trading strategy development.
+A still under developement comprehensive machine learning framework for financial time series forecasting, market regime detection, and automated trading strategy development.
 
 Overview
 Financial ML Fusion combines advanced machine learning techniques to analyze financial markets, detect market regimes, and generate trading signals. The project integrates multiple model architectures including Temporal Fusion Transformers (TFT), Hidden Markov Models (HMM), and Time Series Transformers to create a robust prediction system.
