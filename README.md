@@ -12,3 +12,6 @@ Backtesting Framework: Evaluate strategies with realistic trading conditions (sl
 Statistical Validation: Ensure strategy robustness with Monte Carlo simulations and permutation tests
 Hyperparameter Optimization: Automated grid search for optimal model configuration
 Visualization Tools: Comprehensive visualization of model performance and market regimes
+
+
+note : This repository underwent a comprehensive rebase operation to optimize the commit history. As a result, you may notice the initial commit appearing throughout the codebase
