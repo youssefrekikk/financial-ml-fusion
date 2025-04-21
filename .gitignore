@@ -52,3 +52,4 @@ data/processed/
 # OS specific files
 .DS_Store
 Thumbs.db
+"results/" 
