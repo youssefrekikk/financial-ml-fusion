@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import time
 import matplotlib.pyplot as plt
+from functools import wraps
 import seaborn as sns
 from improved_hmm_model import ImprovedHMMModel
 from utils import load_data,compare_monte_carlo_to_original
@@ -12,7 +13,29 @@ import yfinance as yf
 import os
 
 
+os.makedirs("results/plots", exist_ok=True)
 
+figure_count = 0
+
+original_show = plt.show
+
+# Define a wrapper for plt.show
+@wraps(plt.show)
+def show_and_save(*args, **kwargs):
+    global figure_count
+    plt.savefig(f"results/plots/figure_{figure_count}.png", dpi=300, bbox_inches='tight')
+    print(f"Saved figure to results/plots/figure_{figure_count}.png")
+    figure_count += 1
+    # Call the original function
+    return original_show(*args, **kwargs)
+
+# Replace plt.show with our wrapper
+plt.show = show_and_save
+
+def save_figure(plt, name):
+    """Save the current figure with the given name"""
+    plt.savefig(f"results/plots/{name}.png", dpi=300, bbox_inches='tight')
+    print(f"Saved plot to results/plots/{name}.png")
 
 
 
@@ -74,6 +97,8 @@ def evaluate_model(model, test_data):
     plt.title('Confusion Matrix for Directional Prediction')
     plt.xlabel('Predicted Direction')
     plt.ylabel('True Direction')
+    plt.title('Confusion Matrix for Directional Prediction')
+    save_figure(plt, "confusion_matrix")
     plt.show()
     
     return predictions
@@ -253,6 +278,7 @@ def main():
     plt.xlabel('Test End Date')
     plt.ylabel('Sharpe Ratio')
     plt.grid(True, alpha=0.3)
+    save_figure(plt, "Walk-Forward Validation: Sharpe Ratio")
     plt.show()
     
     # Test with simulator
