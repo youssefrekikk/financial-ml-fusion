@@ -472,15 +472,16 @@ def plot_predictions(result_df, ticker, save_dir="plots"):
     
     print(f"Prediction plots saved to {save_dir}/{ticker}_tft_predictions.png and {save_dir}/{ticker}_tft_signal_distribution.png")
 
-def optimize_model_hyperparameters(training, train_dataloader, val_dataloader, 
+def optimize_model_hyperparameters(training, train_dataloader, val_dataloader, data,
                                   n_trials=20, max_epochs=20, enable_progress_bar=False):
     """
-    Optimize hyperparameters for TFT model
+    Optimize hyperparameters for TFT model using multi-objective optimization
     
     Args:
         training (TimeSeriesDataSet): Training dataset
         train_dataloader (DataLoader): Training data loader
         val_dataloader (DataLoader): Validation data loader
+        data (DataFrame): Original data for calculating financial metrics
         n_trials (int): Number of optimization trials
         max_epochs (int): Maximum number of epochs per trial
         enable_progress_bar (bool): Whether to enable progress bar
@@ -488,29 +489,159 @@ def optimize_model_hyperparameters(training, train_dataloader, val_dataloader,
     Returns:
         dict: Best parameters
     """
-    # Create study
-    study = optimize_hyperparameters(
-        train_dataloader=train_dataloader,
-        val_dataloader=val_dataloader,
-        model_class=TemporalFusionTransformer,
-        max_epochs=max_epochs,
-        n_trials=n_trials,
-        hidden_size=[16, 32, 64, 128],
-        hidden_continuous_size=[8, 16, 32, 64],
-        attention_head_size=[1, 2, 4, 8],
-        dropout=[0.1, 0.2, 0.3],
-        learning_rate=[0.001, 0.01],
-        trainer_kwargs=dict(
-            accelerator="auto",
-            enable_progress_bar=enable_progress_bar,
-        ),
-        reduce_on_plateau_patience=3,
-        use_learning_rate_finder=False,
-    )
+    # Create temporary directory for model checkpoints
+    import tempfile
+    import os
+    import optuna
+    import numpy as np
     
-    # Get best parameters
-    best_params = study.best_params
-    print(f"Best parameters: {best_params}")
+    # Define a custom objective function
+    def objective(trial):
+        # Define hyperparameters to optimize
+        config = {
+            "hidden_size": trial.suggest_int("hidden_size", 16, 128),
+            "attention_head_size": trial.suggest_int("attention_head_size", 1, 8),
+            "dropout": trial.suggest_float("dropout", 0.1, 0.3),
+            "hidden_continuous_size": trial.suggest_int("hidden_continuous_size", 8, 64),
+            "learning_rate": trial.suggest_float("learning_rate", 0.001, 0.01, log=True),
+        }
+        
+        # Create model with these hyperparameters
+        model = TemporalFusionTransformer.from_dataset(
+            training,
+            **config,
+            loss=QuantileLoss(quantiles=[0.1, 0.5, 0.9]),
+            log_interval=0,
+            reduce_on_plateau_patience=3,
+        )
+        
+        # Create early stopping callback
+        early_stop_callback = EarlyStopping(
+            monitor="val_loss", 
+            min_delta=1e-4, 
+            patience=5, 
+            verbose=False, 
+            mode="min"
+        )
+        
+        # Create trainer
+        trainer = pl.Trainer(
+            max_epochs=max_epochs,
+            accelerator="auto",
+            enable_model_summary=False,
+            gradient_clip_val=0.1,
+            callbacks=[early_stop_callback],
+            enable_progress_bar=enable_progress_bar,
+            limit_val_batches=1.0,
+            log_every_n_steps=10,
+            enable_checkpointing=False,
+        )
+        
+        # Fit model
+        trainer.fit(
+            model,
+            train_dataloaders=train_dataloader,
+            val_dataloaders=val_dataloader,
+        )
+        
+        # Get validation loss
+        val_loss = trainer.callback_metrics["val_loss"].item()
+        
+        # Generate predictions to calculate Sharpe ratio
+        try:
+            # Use a moderate threshold for signal generation
+            threshold = 0.002
+            result_df = generate_predictions(
+                model=model,
+                validation_dataloader=val_dataloader,
+                data=data,
+                threshold=threshold
+            )
+            
+            # Calculate Sharpe ratio
+            eval_df = result_df.dropna(subset=['prediction'])
+            
+            if len(eval_df) <= 1:
+                sharpe_ratio = -10  # Penalize if not enough predictions
+            else:
+                # Calculate strategy returns
+                eval_df['strategy_return'] = eval_df['signal'].shift(1) * eval_df['target']
+                
+                # Calculate Sharpe ratio (annualized)
+                daily_returns = eval_df['strategy_return'].dropna()
+                if len(daily_returns) > 0 and daily_returns.std() > 0:
+                    sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
+                else:
+                    sharpe_ratio = -10  # Penalize if not enough data or zero std
+            
+            # Print progress information
+            print(f"Trial {trial.number}: val_loss={val_loss:.6f}, sharpe_ratio={sharpe_ratio:.4f}")
+            
+            # Return both metrics
+            return val_loss, -sharpe_ratio  # Negative because Optuna minimizes
+            
+        except Exception as e:
+            print(f"Error calculating Sharpe ratio: {e}")
+            return val_loss, 100  # Large value to penalize failed trials
+    
+    # Create study with two objectives
+    study = optuna.create_study(directions=["minimize", "minimize"])
+    
+    try:
+        study.optimize(objective, n_trials=n_trials)
+    except KeyboardInterrupt:
+        print("Optimization interrupted! Using best parameters found so far.")
+    
+    # Get best trials
+    best_trials = study.best_trials
+    
+    # Print Pareto front
+    print("\nPareto Front (Best Trials):")
+    print("===========================")
+    for i, trial in enumerate(best_trials):
+        print(f"Trial {trial.number}: val_loss={trial.values[0]:.6f}, sharpe_ratio={-trial.values[1]:.4f}")
+        print(f"  Parameters: {trial.params}")
+    
+    # Select the trial with the best balance of metrics
+    # We'll use a simple approach: normalize both metrics and find the trial with the smallest Euclidean distance to the ideal point
+    if len(best_trials) > 0:
+        # Extract values for normalization
+        val_losses = [t.values[0] for t in best_trials]
+        sharpe_ratios = [-t.values[1] for t in best_trials]
+        
+        # Normalize values to [0, 1]
+        min_loss, max_loss = min(val_losses), max(val_losses)
+        min_sharpe, max_sharpe = min(sharpe_ratios), max(sharpe_ratios)
+        
+        loss_range = max_loss - min_loss if max_loss > min_loss else 1
+        sharpe_range = max_sharpe - min_sharpe if max_sharpe > min_sharpe else 1
+        
+        normalized_losses = [(loss - min_loss) / loss_range for loss in val_losses]
+        # Invert sharpe ratio so that higher is better
+        normalized_sharpes = [1 - (sharpe - min_sharpe) / sharpe_range for sharpe in sharpe_ratios]
+        
+        # Calculate distances to ideal point (0, 0)
+        distances = [np.sqrt(nl**2 + ns**2) for nl, ns in zip(normalized_losses, normalized_sharpes)]
+        
+        # Find trial with minimum distance
+        best_idx = distances.index(min(distances))
+        best_trial = best_trials[best_idx]
+        
+        print(f"\nSelected best balanced trial: {best_trial.number}")
+        print(f"  val_loss={best_trial.values[0]:.6f}, sharpe_ratio={-best_trial.values[1]:.4f}")
+        print(f"  Parameters: {best_trial.params}")
+        
+        best_params = best_trial.params
+    else:
+        # Fallback to default parameters if no trials completed
+        best_params = {
+            "hidden_size": 64,
+            "attention_head_size": 4,
+            "dropout": 0.1,
+            "hidden_continuous_size": 32,
+            "learning_rate": 0.001
+        }
+        print("\nNo completed trials found. Using default parameters.")
     
     return best_params
 
